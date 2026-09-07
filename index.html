@@ -21,6 +21,19 @@
     }
     #gameCanvas { position: absolute; top: 0; left: 0; z-index: 1; }
 
+    /* 라이프 게이지 바 */
+    .hp-bar-container {
+      position: absolute; top: 12px; right: 12px; z-index: 5;
+      width: 140px; height: 16px; background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(0, 210, 255, 0.8); border-radius: 8px;
+      overflow: hidden; padding: 2px;
+    }
+    .hp-bar-fill {
+      width: 100%; height: 100%;
+      background: linear-gradient(90deg, #ff0055, #00ff88);
+      border-radius: 6px; transition: width 0.1s linear;
+    }
+
     /* 좌측 상단 일시정지 버튼 */
     .pause-btn {
       position: absolute; top: 12px; left: 12px; z-index: 5;
@@ -109,7 +122,10 @@
   <!-- Audio Tag -->
   <audio id="bgm" preload="auto"></audio>
 
-  <!-- Canvas & Pause Button -->
+  <!-- UI Elements (HP Bar, Pause Button) -->
+  <div class="hp-bar-container" id="hpContainer" style="display: none;">
+    <div id="hpFill" class="hp-bar-fill"></div>
+  </div>
   <button id="pauseBtn" class="pause-btn" onclick="pauseGame()">⏸</button>
   <canvas id="gameCanvas" width="420" height="680"></canvas>
 
@@ -127,9 +143,9 @@
     <button class="btn btn-danger" onclick="quitToMenu()">MAIN MENU</button>
   </div>
 
-  <!-- 3. 스테이지 결과 화면 -->
+  <!-- 3. 스테이지 결과 화면 (성공 / 실패 공용) -->
   <div id="result-overlay" class="overlay" style="display: none;">
-    <div class="title" style="color: #00ff88;">STAGE CLEAR!</div>
+    <div id="resultTitle" class="title" style="color: #00ff88;">STAGE CLEAR!</div>
     <div id="newRecordTag" class="new-record-banner">★ NEW HIGH SCORE! ★</div>
     
     <!-- 최고기록 달성 시 이름 입력 상자 -->
@@ -157,10 +173,11 @@ const pauseOverlay = document.getElementById('pause-overlay');
 const resultOverlay = document.getElementById('result-overlay');
 const songListContainer = document.getElementById('songListContainer');
 const pauseBtn = document.getElementById('pauseBtn');
+const hpContainer = document.getElementById('hpContainer');
+const hpFill = document.getElementById('hpFill');
 const nameInputBox = document.getElementById('nameInputBox');
 const playerNameInput = document.getElementById('playerNameInput');
 
-// ★ 곡별 개별 1절 플레이 타임(verseDuration) 설정
 let playlist = [
   { 
     id: "gangnam", 
@@ -168,7 +185,7 @@ let playlist = [
     artist: "PSY", 
     src: "assets/gangnamstyle.mp3", 
     bpm: 132, 
-    verseDuration: 100, // 1분 40초 (1절 후렴 종료 지점)
+    verseDuration: 100, 
     displayTime: "1분 40초"
   },
   { 
@@ -177,7 +194,7 @@ let playlist = [
     artist: "BLACKPINK", 
     src: "assets/majimak.mp3", 
     bpm: 125, 
-    verseDuration: 95, // 1분 35초 (1절 후렴 종료 지점)
+    verseDuration: 95, 
     displayTime: "1분 35초"
   },
   { 
@@ -186,7 +203,7 @@ let playlist = [
     artist: "BTS", 
     src: "assets/fire.mp3", 
     bpm: 140, 
-    verseDuration: 87, // 1분 27초
+    verseDuration: 87, 
     displayTime: "1분 27초"
   }
 ];
@@ -216,7 +233,18 @@ let lastJudgement = { text: '', color: '#fff', alpha: 0 };
 const keyPressed = [false, false, false, false];
 let chart = [];
 
-// --- 스토리지 최고점수 및 이름 관리 ---
+// ★ 추가된 라이프 시스템 변수 ★
+let hp = 100;
+const MAX_HP = 100;
+const MISS_DAMAGE = 15; // 놓쳤을 때 감점되는 라이프
+const HEAL_AMOUNT = 2;   // 성공 시 회복되는 라이프
+
+function updateHpBar() {
+  const percent = Math.max(0, (hp / MAX_HP) * 100);
+  hpFill.style.width = percent + '%';
+}
+
+// 스토리지 최고점수 및 이름 관리
 function getHighScoreData(songId) {
   const score = parseInt(localStorage.getItem(`rhythm_best_score_${songId}`) || '0', 10);
   const name = localStorage.getItem(`rhythm_best_name_${songId}`) || 'NONE';
@@ -268,10 +296,7 @@ function selectSong(index) {
   renderSongList();
 }
 
-// --- 곡별 전용 노트 패턴 생성기 ---
-// 곡마다 인트로 → 벌스 → 빌드업 → 후렴 → 아웃트로 구간을 나누고,
-// 구간별로 밀도와 패턴 형태(단타/동시치기/롱노트/스트림)를 다르게 배치해
-// 실제 곡의 전개(도입-전개-절정-마무리)를 노트 패턴에 반영한다.
+// 곡별 전용 노트 패턴 생성기
 function buildChart(song, totalDurationSec) {
   const chartData = [];
   const bpm = song.bpm;
@@ -303,8 +328,6 @@ function buildChart(song, totalDurationSec) {
     const measureStart = startOffset + m * 4 * beatTime;
     const progress = m / totalMeasures;
 
-    // 1) 강남스타일: 절제된 인트로 → 통통 튀는 8비트 벌스 → 밀도 상승 빌드업
-    //    → 2레인 동시치기 위주의 신나는 말춤 후렴 → 차분한 아웃트로
     if (song.id === 'gangnam') {
       const section = progress < 0.15 ? 'intro'
         : progress < 0.45 ? 'verse'
@@ -314,19 +337,16 @@ function buildChart(song, totalDurationSec) {
 
       if (section === 'intro') {
         for (let step = 0; step < 4; step++) {
-          const t = measureStart + step * beatTime;
-          addTap((m + step) % 4, t);
+          addTap((m + step) % 4, measureStart + step * beatTime);
         }
       } else if (section === 'verse') {
         for (let step = 0; step < 8; step++) {
-          const t = measureStart + step * (beatTime / 2);
-          if (step % 2 === 0) addTap((m + step / 2) % 4, t);
+          if (step % 2 === 0) addTap((m + step / 2) % 4, measureStart + step * (beatTime / 2));
         }
         if (m % 2 === 1) addTap((m + 3) % 4, measureStart + 3.5 * beatTime, 0.1);
       } else if (section === 'build') {
         for (let step = 0; step < 8; step++) {
-          const t = measureStart + step * (beatTime / 2);
-          addTap((m + step) % 4, t, 0.1);
+          addTap((m + step) % 4, measureStart + step * (beatTime / 2), 0.1);
         }
       } else if (section === 'chorus') {
         for (let step = 0; step < 8; step++) {
@@ -341,14 +361,10 @@ function buildChart(song, totalDurationSec) {
         }
       } else {
         for (let step = 0; step < 4; step++) {
-          const t = measureStart + step * beatTime;
-          addTap((m + step) % 4, t);
+          addTap((m + step) % 4, measureStart + step * beatTime);
         }
       }
     }
-
-    // 2) 마지막처럼: 엇박 위주의 벌스 → 긴장감 있는 롱노트 프리코러스
-    //    → 롱노트+빠른 스텝이 배합된 멜로디 후렴 → 여운을 남기는 롱노트 아웃트로
     else if (song.id === 'majimak') {
       const section = progress < 0.2 ? 'verse1'
         : progress < 0.35 ? 'prechorus'
@@ -358,8 +374,7 @@ function buildChart(song, totalDurationSec) {
 
       if (section === 'verse1' || section === 'verse2') {
         for (let step = 0; step < 8; step++) {
-          const t = measureStart + step * (beatTime / 2);
-          if (step % 2 === 1) addTap((m + step) % 4, t);
+          if (step % 2 === 1) addTap((m + step) % 4, measureStart + step * (beatTime / 2));
         }
       } else if (section === 'prechorus') {
         const lane = m % 4;
@@ -369,22 +384,17 @@ function buildChart(song, totalDurationSec) {
         if (m % 2 === 0) {
           addHold(m % 4, measureStart, beatTime * 2, 0.15);
           for (let step = 4; step < 8; step++) {
-            const t = measureStart + step * (beatTime / 2);
-            addTap((step + m) % 4, t, 0.1);
+            addTap((step + m) % 4, measureStart + step * (beatTime / 2), 0.1);
           }
         } else {
           for (let step = 0; step < 8; step++) {
-            const t = measureStart + step * (beatTime / 2);
-            if (step % 2 === 0) addTap((step / 2 + m) % 4, t, 0.1);
+            if (step % 2 === 0) addTap((step / 2 + m) % 4, measureStart + step * (beatTime / 2), 0.1);
           }
         }
       } else {
         addHold(m % 4, measureStart, beatTime * 4, 0.2);
       }
     }
-
-    // 3) 불타오르네: 절제된 인트로 → 스트림 벌스 → 밀도 상승 빌드업
-    //    → 강박에 동시치기가 섞이는 폭타 후렴 → 스트림 아웃트로
     else if (song.id === 'fire') {
       const section = progress < 0.15 ? 'intro'
         : progress < 0.4 ? 'verse'
@@ -395,8 +405,7 @@ function buildChart(song, totalDurationSec) {
 
       if (section === 'intro') {
         for (let step = 0; step < 4; step++) {
-          const t = measureStart + step * beatTime;
-          addTap((m + step) % 4, t, 0.12);
+          addTap((m + step) % 4, measureStart + step * beatTime, 0.12);
         }
       } else if (section === 'verse') {
         for (let step = 0; step < 8; step++) {
@@ -415,8 +424,7 @@ function buildChart(song, totalDurationSec) {
         }
       } else {
         for (let step = 0; step < 4; step++) {
-          const t = measureStart + step * beatTime;
-          addTap((m + step) % 4, t, 0.15);
+          addTap((m + step) % 4, measureStart + step * beatTime, 0.15);
         }
       }
     }
@@ -426,7 +434,7 @@ function buildChart(song, totalDurationSec) {
   return chartData;
 }
 
-// --- 게임 흐름 제어 ---
+// 게임 흐름 제어
 function startGame() {
   menuOverlay.style.display = 'none';
   resultOverlay.style.display = 'none';
@@ -434,6 +442,9 @@ function startGame() {
 
   const song = playlist[selectedSongIndex];
   score = 0; combo = 0; maxCombo = 0;
+  hp = MAX_HP; // 라이프 초기화
+  updateHpBar();
+
   isGamePaused = false;
   isCountingDown = false;
 
@@ -441,12 +452,12 @@ function startGame() {
   audio.currentTime = 0;
 
   audio.play().then(() => {
-    // 선택한 곡의 개별 1절 시간 반영
     currentPlayDuration = song.verseDuration; 
     chart = buildChart(song, currentPlayDuration);
     startTime = performance.now();
     isGameRunning = true;
     pauseBtn.style.display = 'block';
+    hpContainer.style.display = 'block';
     requestAnimationFrame(gameLoop);
   }).catch(() => {
     alert(`음악 파일 재생 실패: ${song.src} 경로를 확인해주세요.`);
@@ -474,10 +485,8 @@ function resumeGame() {
     countdownVal--;
     if (countdownVal <= 0) {
       clearInterval(timer);
-      
       const pausedDuration = performance.now() - pauseStartTime;
       startTime += pausedDuration;
-      
       isCountingDown = false;
       isGamePaused = false;
       audio.play();
@@ -494,23 +503,38 @@ function quitToMenu() {
   showMenu();
 }
 
-function endGame() {
+// 스테이지 종료 (클리어 또는 실패)
+function endGame(isFailed = false) {
   isGameRunning = false;
   isGamePaused = false;
   isCountingDown = false;
   pauseBtn.style.display = 'none';
+  hpContainer.style.display = 'none';
   audio.pause();
 
   const song = playlist[selectedSongIndex];
-  const isNewRecord = saveHighScoreScore(song.id, score);
+  const resultTitle = document.getElementById('resultTitle');
 
-  if (isNewRecord) {
-    document.getElementById('newRecordTag').style.display = 'block';
-    playerNameInput.value = '';
-    nameInputBox.style.display = 'flex';
-  } else {
+  if (isFailed) {
+    // 실패(Game Over) 처리
+    resultTitle.innerText = "STAGE FAILED";
+    resultTitle.style.color = "#ff0055";
     document.getElementById('newRecordTag').style.display = 'none';
     nameInputBox.style.display = 'none';
+  } else {
+    // 성공(Clear) 처리
+    resultTitle.innerText = "STAGE CLEAR!";
+    resultTitle.style.color = "#00ff88";
+
+    const isNewRecord = saveHighScoreScore(song.id, score);
+    if (isNewRecord) {
+      document.getElementById('newRecordTag').style.display = 'block';
+      playerNameInput.value = '';
+      nameInputBox.style.display = 'flex';
+    } else {
+      document.getElementById('newRecordTag').style.display = 'none';
+      nameInputBox.style.display = 'none';
+    }
   }
 
   document.getElementById('resScore').innerText = score.toString().padStart(7, '0');
@@ -522,6 +546,7 @@ function endGame() {
 function showMenu() {
   resultOverlay.style.display = 'none';
   pauseBtn.style.display = 'none';
+  hpContainer.style.display = 'none';
   renderSongList();
   menuOverlay.style.display = 'flex';
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -579,11 +604,24 @@ function checkKeyRelease(lane) {
 
 function setJudgement(text, color, addedScore, isBreak = false) {
   lastJudgement = { text, color, alpha: 1.0 };
-  if (isBreak) combo = 0;
-  else {
+  if (isBreak) {
+    combo = 0;
+    // ★ BREAK 발생 시 라이프 차감 ★
+    hp -= MISS_DAMAGE;
+    if (hp <= 0) {
+      hp = 0;
+      updateHpBar();
+      endGame(true); // 실패 상태로 게임 종료
+      return;
+    }
+  } else {
     combo++; if (combo > maxCombo) maxCombo = combo;
     score += addedScore + combo * 10;
+    
+    // ★ 노트를 맞추면 라이프 소량 회복 ★
+    hp = Math.min(MAX_HP, hp + HEAL_AMOUNT);
   }
+  updateHpBar();
 }
 
 // 메인 렌더링 루프
@@ -596,7 +634,7 @@ function gameLoop(now) {
     : (now - startTime) / 1000;
 
   if (!isCountingDown && (audio.ended || currentTime >= currentPlayDuration || audio.currentTime >= currentPlayDuration)) {
-    endGame();
+    endGame(false); // 완곡 성공
     return;
   }
 
